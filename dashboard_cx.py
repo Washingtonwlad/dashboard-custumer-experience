@@ -307,10 +307,10 @@ with st.sidebar:
     <div class="sidebar-section">
       <h4>Cómo usar</h4>
       <ol>
-        <li>Descarga el reporte Excel desde ElasticSearch</li>
-        <li>Súbelo usando el botón "Browse Files"</li>
+        <li>Descarga el reporte Excel desde evaluar.com</li>
+        <li>Súbelo usando el botón de arriba</li>
         <li>Explora las pestañas del dashboard</li>
-        <li>Haz clic en un perfil o proceso para ver su detalle</li>
+        <li>Haz clic en un perfil para ver su detalle</li>
       </ol>
     </div>
     """, unsafe_allow_html=True)
@@ -1275,6 +1275,22 @@ with tab_cand:
                         )],
                     )
                     st.plotly_chart(fig_fit, use_container_width=True)
+
+                    # ── Alerta de recalibración
+                    if pct_adeq > 40 or pct_adeq < 10:
+                        st.markdown(
+                            f"<div style='background:#fff8e1;border-left:4px solid #ffab48;"
+                            f"border-radius:0 8px 8px 0;padding:12px 16px;margin-top:4px;"
+                            f"display:flex;align-items:flex-start;gap:10px;'>"
+                            f"<span style='font-size:1.1rem;'>⚠️</span>"
+                            f"<span style='font-size:0.83rem;color:#7a4f00;line-height:1.5;'>"
+                            f"<b>Perfil posiblemente desbalanceado</b> — el porcentaje de candidatos "
+                            f"Adecuados es de <b>{pct_adeq}%</b>. "
+                            f"Probablemente se requiera recalibrar este perfil para obtener "
+                            f"una mejor distribución de los resultados."
+                            f"</span></div>",
+                            unsafe_allow_html=True,
+                        )
 
             # ── Competencias del proceso ──────────────────────────────────────
             if not df_comps.empty and "profile_name" in df_comps.columns:
