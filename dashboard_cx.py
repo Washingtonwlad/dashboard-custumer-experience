@@ -371,8 +371,8 @@ if company_name:
     )
 
 # ── Main tabs ─────────────────────────────────────────────────────────────────
-tab_dif, tab_rank, tab_comp, tab_comps, tab_cand = st.tabs([
-    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 Candidatos"
+tab_dif, tab_rank, tab_comp, tab_comps, tab_cand, tab_recal = st.tabs([
+    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 Candidatos", "🔧 Recalibración"
 ])
 
 
@@ -1277,7 +1277,7 @@ with tab_cand:
                     st.plotly_chart(fig_fit, use_container_width=True)
 
                     # ── Alerta de recalibración
-                    if pct_adeq > 40 or pct_adeq < 10:
+                    if pct_adeq > 30 or pct_adeq < 10:
                         st.markdown(
                             f"<div style='background:#fff8e1;border-left:4px solid #ffab48;"
                             f"border-radius:0 8px 8px 0;padding:12px 16px;margin-top:4px;"
@@ -1379,3 +1379,177 @@ with tab_cand:
                         f"</table></div></div>",
                         unsafe_allow_html=True,
                     )
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB 6 — RECALIBRACIÓN
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_recal:
+
+    st.markdown("<div class='section-title'>Recalibración de Perfiles</div>", unsafe_allow_html=True)
+    st.markdown(
+        "<p style='font-size:0.85rem;color:#7a7a9d;margin:-8px 0 20px 0;'>"
+        "Identifica perfiles que requieren ajuste según la distribución de candidatos Adecuados.</p>",
+        unsafe_allow_html=True,
+    )
+
+    # ── Threshold controls
+    st.markdown(
+        "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;"
+        "color:#2d2a5e;margin-bottom:4px;'>⚙️ Parámetros de evaluación</p>",
+        unsafe_allow_html=True,
+    )
+    ctrl1, ctrl2, ctrl3 = st.columns(3, gap="medium")
+    with ctrl1:
+        umbral_flexible = st.number_input(
+            "Perfil muy flexible — Adecuados superan (%)",
+            min_value=1, max_value=99, value=30, step=1,
+            help="Procesos donde el % de Adecuados supera este valor se consideran demasiado permisivos.",
+            key="umbral_flexible",
+        )
+    with ctrl2:
+        umbral_exigente = st.number_input(
+            "Perfil muy exigente — Adecuados menores a (%)",
+            min_value=1, max_value=99, value=10, step=1,
+            help="Procesos donde el % de Adecuados es menor a este valor se consideran demasiado exigentes.",
+            key="umbral_exigente",
+        )
+    with ctrl3:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='background:#f0eeff;border-radius:8px;padding:10px 14px;"
+            f"font-size:0.82rem;color:#2d2a5e;margin-top:4px;'>"
+            f"Rango óptimo: <b style='color:{ACCENT};'>{umbral_exigente}%</b> "
+            f"— <b style='color:{ACCENT};'>{umbral_flexible}%</b> de Adecuados</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Build recalibration lists from resumen_candidatos
+    df_recal_src = sheets.get("resumen_candidatos", pd.DataFrame())
+    flexibles = []
+    exigentes = []
+
+    if not df_recal_src.empty:
+        df_recal = df_recal_src[df_recal_src["profile_name"].notna()].copy()
+        df_recal = df_recal[df_recal["profile_name"].str.upper().str.strip() != "TOTAL"]
+        df_recal = df_recal[~df_recal["profile_name"].str.upper().str.contains("CONFIABILIDAD", na=False)]
+
+        for _, row in df_recal.iterrows():
+            ended  = int(row["ENDED"])  if pd.notna(row.get("ENDED"))  else 0
+            adeq   = int(row["Adecuado"]) if pd.notna(row.get("Adecuado")) else 0
+            cerc   = int(row["Cercano"])  if pd.notna(row.get("Cercano"))  else 0
+            alej   = int(row["Alejado"])  if pd.notna(row.get("Alejado"))  else 0
+            total_fit = adeq + cerc + alej
+            if total_fit == 0:
+                continue
+            pct_a = round(adeq / total_fit * 100, 1)
+            entry = {
+                "processId":   row.get("processId", ""),
+                "profile_name": row["profile_name"],
+                "total":       int(row["total_candidates"]) if pd.notna(row.get("total_candidates")) else 0,
+                "adecuado":    adeq,
+                "cercano":     cerc,
+                "alejado":     alej,
+                "pct_adeq":    pct_a,
+                "total_fit":   total_fit,
+            }
+            if pct_a > umbral_flexible:
+                flexibles.append(entry)
+            elif pct_a < umbral_exigente:
+                exigentes.append(entry)
+
+        flexibles.sort(key=lambda x: -x["pct_adeq"])
+        exigentes.sort(key=lambda x:  x["pct_adeq"])
+
+    # ── KPI summary row
+    k1, k2, k3 = st.columns(3)
+    k1.markdown(f"""
+    <div class='metric-card'>
+      <div class='label'>Perfiles muy flexibles</div>
+      <div class='value' style='color:#ffab48;'>{len(flexibles)}</div>
+      <span class='badge badge-media'>Adecuados &gt; {umbral_flexible}%</span>
+    </div>""", unsafe_allow_html=True)
+    k2.markdown(f"""
+    <div class='metric-card'>
+      <div class='label'>Perfiles muy exigentes</div>
+      <div class='value' style='color:#e03131;'>{len(exigentes)}</div>
+      <span class='badge badge-alta'>Adecuados &lt; {umbral_exigente}%</span>
+    </div>""", unsafe_allow_html=True)
+    total_ok = len(df_recal) - len(flexibles) - len(exigentes) if not df_recal_src.empty else 0
+    k3.markdown(f"""
+    <div class='metric-card'>
+      <div class='label'>Perfiles en rango óptimo</div>
+      <div class='value' style='color:#4ade80;'>{total_ok}</div>
+      <span class='badge badge-baja'>Entre {umbral_exigente}% y {umbral_flexible}%</span>
+    </div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # ── Two column tables
+    col_flex, col_exig = st.columns(2, gap="large")
+
+    def build_recal_table(items, color, label_pct, title, icon):
+        if not items:
+            return (
+                f"<div style='background:white;border-radius:10px;padding:28px 20px;"
+                f"text-align:center;box-shadow:0 2px 10px rgba(0,0,0,0.06);'>"
+                f"<div style='font-size:2rem;margin-bottom:8px;'>✅</div>"
+                f"<p style='font-size:0.88rem;color:#7a7a9d;'>Sin perfiles en esta categoría<br>"
+                f"con los parámetros actuales.</p></div>"
+            )
+        rows = ""
+        for e in items:
+            bar_pct = round(e["pct_adeq"])
+            rows += (
+                f"<tr style='border-bottom:1px solid #f0eeff;'>"
+                f"<td style='padding:10px 14px;font-size:0.84rem;color:#2d2a5e;font-weight:500;'>"
+                f"{e['profile_name']}</td>"
+                f"<td style='padding:10px 14px;'>"
+                f"<div style='display:flex;align-items:center;gap:8px;'>"
+                f"<div style='background:#eeecf7;border-radius:20px;height:7px;width:80px;flex-shrink:0;'>"
+                f"<div style='background:{color};border-radius:20px;height:7px;width:{min(bar_pct,100)}%;'></div></div>"
+                f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;color:{color};'>"
+                f"{e['pct_adeq']}%</span></div></td>"
+                f"<td style='padding:10px 14px;text-align:center;font-size:0.82rem;color:#7a7a9d;'>"
+                f"{e['adecuado']}<span style='font-size:0.72rem;'> / {e['total_fit']}</span></td>"
+                f"</tr>"
+            )
+        return (
+            f"<div style='background:white;border-radius:10px;overflow:hidden;"
+            f"box-shadow:0 2px 10px rgba(0,0,0,0.06);'>"
+            f"<div style='max-height:480px;overflow-y:auto;'>"
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<thead><tr style='background:{SIDEBAR_BG};'>"
+            f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+            f"letter-spacing:0.05em;text-align:left;'>Perfil</th>"
+            f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+            f"letter-spacing:0.05em;text-align:left;width:130px;'>% Adecuados</th>"
+            f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+            f"letter-spacing:0.05em;text-align:center;width:80px;'>Adeq / Total</th>"
+            f"</tr></thead>"
+            f"<tbody>{rows}</tbody>"
+            f"</table></div></div>"
+        )
+
+    with col_flex:
+        st.markdown(
+            f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;"
+            f"color:#b06000;margin-bottom:10px;'>🟡 Muy flexibles "
+            f"<span style='font-size:0.8rem;font-weight:400;color:#7a7a9d;'>"
+            f"(Adecuados &gt; {umbral_flexible}%)</span></p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(build_recal_table(flexibles, "#ffab48", "pct_adeq", "flexible", "🟡"),
+                    unsafe_allow_html=True)
+
+    with col_exig:
+        st.markdown(
+            f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;"
+            f"color:#b30000;margin-bottom:10px;'>🔴 Muy exigentes "
+            f"<span style='font-size:0.8rem;font-weight:400;color:#7a7a9d;'>"
+            f"(Adecuados &lt; {umbral_exigente}%)</span></p>",
+            unsafe_allow_html=True,
+        )
+        st.markdown(build_recal_table(exigentes, "#e03131", "pct_adeq", "exigente", "🔴"),
+                    unsafe_allow_html=True)
