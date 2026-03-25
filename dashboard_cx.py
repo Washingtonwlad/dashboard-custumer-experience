@@ -1436,7 +1436,6 @@ with tab_recal:
         df_recal = df_recal[~df_recal["profile_name"].str.upper().str.contains("CONFIABILIDAD", na=False)]
 
         for _, row in df_recal.iterrows():
-            ended  = int(row["ENDED"])  if pd.notna(row.get("ENDED"))  else 0
             adeq   = int(row["Adecuado"]) if pd.notna(row.get("Adecuado")) else 0
             cerc   = int(row["Cercano"])  if pd.notna(row.get("Cercano"))  else 0
             alej   = int(row["Alejado"])  if pd.notna(row.get("Alejado"))  else 0
@@ -1444,20 +1443,37 @@ with tab_recal:
             if total_fit == 0:
                 continue
             pct_a = round(adeq / total_fit * 100, 1)
+            pid   = row.get("processId", "")
+            # Build display label: append short ID suffix if profile_name repeats
+            pname = row["profile_name"]
             entry = {
-                "processId":   row.get("processId", ""),
-                "profile_name": row["profile_name"],
-                "total":       int(row["total_candidates"]) if pd.notna(row.get("total_candidates")) else 0,
-                "adecuado":    adeq,
-                "cercano":     cerc,
-                "alejado":     alej,
-                "pct_adeq":    pct_a,
-                "total_fit":   total_fit,
+                "processId":    pid,
+                "profile_name": pname,
+                "total":        int(row["total_candidates"]) if pd.notna(row.get("total_candidates")) else 0,
+                "adecuado":     adeq,
+                "cercano":      cerc,
+                "alejado":      alej,
+                "pct_adeq":     pct_a,
+                "total_fit":    total_fit,
             }
             if pct_a > umbral_flexible:
                 flexibles.append(entry)
             elif pct_a < umbral_exigente:
                 exigentes.append(entry)
+
+        # Add short processId suffix to display name when profile_name is duplicated
+        for lst in [flexibles, exigentes]:
+            name_count = {}
+            for e in lst:
+                name_count[e["profile_name"]] = name_count.get(e["profile_name"], 0) + 1
+            name_seen = {}
+            for e in lst:
+                if name_count[e["profile_name"]] > 1:
+                    idx = name_seen.get(e["profile_name"], 1)
+                    name_seen[e["profile_name"]] = idx + 1
+                    e["display_name"] = f"{e['profile_name']}  #{idx}"
+                else:
+                    e["display_name"] = e["profile_name"]
 
         flexibles.sort(key=lambda x: -x["pct_adeq"])
         exigentes.sort(key=lambda x:  x["pct_adeq"])
@@ -1504,7 +1520,7 @@ with tab_recal:
             rows += (
                 f"<tr style='border-bottom:1px solid #f0eeff;'>"
                 f"<td style='padding:10px 14px;font-size:0.84rem;color:#2d2a5e;font-weight:500;'>"
-                f"{e['profile_name']}</td>"
+                f"{e.get('display_name', e['profile_name'])}</td>"
                 f"<td style='padding:10px 14px;'>"
                 f"<div style='display:flex;align-items:center;gap:8px;'>"
                 f"<div style='background:#eeecf7;border-radius:20px;height:7px;width:80px;flex-shrink:0;'>"
