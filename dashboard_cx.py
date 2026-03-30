@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import plotly.graph_objects as go
 
@@ -452,10 +453,10 @@ if has_date_filter:
     if "ownerName" in df_detalle_global.columns:
         owners += sorted(df_detalle_global["ownerName"].dropna().unique().tolist())
 
-    # Initialize date session state if needed
-    if "date_from" not in st.session_state:
+    # Initialize date session state if needed, or reset if out of range for this file
+    if "date_from" not in st.session_state or st.session_state["date_from"] < global_min or st.session_state["date_from"] > global_max:
         st.session_state["date_from"] = global_min
-    if "date_to" not in st.session_state:
+    if "date_to" not in st.session_state or st.session_state["date_to"] < global_min or st.session_state["date_to"] > global_max:
         st.session_state["date_to"] = global_max
 
     # Inject CSS to style filter container
@@ -595,8 +596,8 @@ else:
             date_filter_active = True
 
 # ── Main tabs ─────────────────────────────────────────────────────────────────
-tab_dif, tab_rank, tab_comp, tab_comps, tab_cand, tab_recal = st.tabs([
-    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 Candidatos", "🔧 Recalibración"
+tab_dif, tab_rank, tab_comp, tab_comps, tab_cap, tab_trust, tab_recal = st.tabs([
+    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 CAP", "🔒 TRUST", "🔧 Recalibración"
 ])
 
 
@@ -1330,27 +1331,29 @@ with tab_comps:
             st.plotly_chart(fig_hbar, use_container_width=True)
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TAB 5 — CANDIDATOS
+# TAB 5 — CAP
 # ═══════════════════════════════════════════════════════════════════════════════
-with tab_cand:
+with tab_cap:
 
     df_cand_raw = sheets.get("resumen_candidatos", pd.DataFrame())
 
     if df_cand_raw.empty:
         st.warning("El archivo no contiene la hoja 'resumen_candidatos'.")
     else:
-        # ── Clean: drop TOTAL row and null profile_names
+        # ── Clean: drop TOTAL row, null profile_names, and TRUST profiles (those go to TRUST tab)
         df_cand_all = df_cand_raw[df_cand_raw["profile_name"].notna()].copy()
         df_cand_all = df_cand_all[
             df_cand_all["profile_name"].str.upper().str.strip() != "TOTAL"
         ].copy()
+        # CAP tab: exclude all TRUST/CONFIABILIDAD profiles
+        df_cand_all = df_cand_all[
+            ~df_cand_all["profile_name"].str.upper().str.contains("CONFIABILIDAD", na=False)
+        ].copy()
         # Apply date filter
         df_cand_all = apply_date_filter(df_cand_all)
 
-        # Separate dataset for Adecuado/Cercano/Alejado (exclude TEST DE CONFIABILIDAD)
-        df_cand_fit = df_cand_all[
-            ~df_cand_all["profile_name"].str.upper().str.contains("CONFIABILIDAD", na=False)
-        ].copy()
+        # For idoneidad (Adecuado/Cercano/Alejado) — same as df_cand_all since TRUST already excluded
+        df_cand_fit = df_cand_all.copy()
 
         # ── Layout: left = list, right = dashboard
         col_proc, col_dash = st.columns([1, 2.6], gap="large")
@@ -1383,41 +1386,21 @@ with tab_cand:
                 name_counts = dp_names["processName"].value_counts() if not dp_names.empty else {}
                 name_seen   = {}
 
-                regular    = [("__all__", "Todos los procesos", None, False)]
-                trust_list = []
+                proc_options = [("__all__", "Todos los procesos", None, False)]
                 for _, r in dp_names.iterrows():
-                    is_conf = r["processId"] in trust_pids or "CONFIABILIDAD" in str(r["processName"]).upper()
                     if name_counts.get(r["processName"], 0) > 1:
                         idx   = name_seen.get(r["processName"], 1)
                         name_seen[r["processName"]] = idx + 1
                         label = f"{r['processName']}  #{idx}"
                     else:
                         label = r["processName"]
-                    entry = (r["processId"], label, r["processName"], is_conf)
-                    if is_conf:
-                        trust_list.append(entry)
-                    else:
-                        regular.append(entry)
+                    proc_options.append((r["processId"], label, r["processName"], False))
 
-                proc_options = regular
-                if trust_list:
-                    proc_options += [("__sep__", "── 🔒 TRUST ──", None, False)] + trust_list
             else:
                 unique_profiles = sorted(df_cand_all["profile_name"].dropna().unique().tolist())
-                # Separate regular and TRUST profiles
-                regular = [("__all__", "Todos los perfiles", None, False)]
-                trust_list = []
+                proc_options = [("__all__", "Todos los perfiles", None, False)]
                 for pname in unique_profiles:
-                    is_conf = "CONFIABILIDAD" in str(pname).upper()
-                    entry = ("__profile__", pname, pname, is_conf)
-                    if is_conf:
-                        trust_list.append(entry)
-                    else:
-                        regular.append(entry)
-
-                proc_options = regular
-                if trust_list:
-                    proc_options += [("__sep__", "── 🔒 TRUST ──", None, False)] + trust_list
+                    proc_options.append(("__profile__", pname, pname, False))
 
             radio_labels = [o[1] for o in proc_options]
 
@@ -1427,12 +1410,6 @@ with tab_cand:
                 key="cand_proc_selector",
                 label_visibility="collapsed",
             )
-
-            # Skip separator selection — auto-select first item after separator
-            if selected_label == "── 🔒 TRUST ──":
-                trust_start = next((o[1] for o in proc_options if o[0] not in ("__all__","__sep__") and o[3]), None)
-                if trust_start:
-                    selected_label = trust_start
 
             st.markdown(
                 "<p style='font-size:0.75rem;color:#7a7a9d;margin-top:6px;'>"
@@ -1506,7 +1483,7 @@ with tab_cand:
 
             st.markdown(
                 f"<div style='display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;'>"
-                f"<div class='section-title' style='margin-bottom:4px;'>Candidatos — {title_ctx}</div>"
+                f"<div class='section-title' style='margin-bottom:4px;'>{title_ctx}</div>"
                 f"{date_html}"
                 f"</div>",
                 unsafe_allow_html=True,
@@ -1613,7 +1590,7 @@ with tab_cand:
             with ch1:
                 st.markdown(
                     "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;"
-                    "color:#2d2a5e;margin-bottom:8px;'>Estado del proceso</p>",
+                    "color:#2d2a5e;margin-bottom:8px;'>Estado de candidatos</p>",
                     unsafe_allow_html=True,
                 )
 
@@ -1621,7 +1598,7 @@ with tab_cand:
                     ("Descalificado", total_disq,  pct_disq,  "#e03131", "#ffe8e8", "#b30000"),
                     ("Finalizado",    total_ended,  pct_ended, "#4ade80", "#e3f7ee", "#007a42"),
                     ("En progreso",   total_inp,    pct_inp,   "#ffab48", "#fff3dc", "#b06000"),
-                    ("Abierto",       total_open,   pct_open,  "#60a5fa", "#e0f0ff", "#1a5fa8"),
+                    ("Sin iniciar",   total_open,   pct_open,  "#60a5fa", "#e0f0ff", "#1a5fa8"),
                 ]
                 pills_html = ""
                 for label, n, pct, color, bg, fg in status_data:
@@ -1637,7 +1614,7 @@ with tab_cand:
 
                 # Donut
                 fig_st = go.Figure(go.Pie(
-                    labels=["Descalificado", "Finalizado", "En progreso", "Abierto"],
+                    labels=["Descalificado", "Finalizado", "En progreso", "Sin iniciar"],
                     values=[total_disq, total_ended, total_inp, total_open],
                     hole=0.58,
                     marker=dict(colors=STATUS_COLORS, line=dict(color="#f4f3f8", width=2)),
@@ -1715,7 +1692,7 @@ with tab_cand:
                 else:
                     st.markdown(
                         "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;"
-                        "color:#2d2a5e;margin-bottom:8px;'>Idoneidad de candidatos</p>",
+                        "color:#2d2a5e;margin-bottom:8px;'>Porcentaje por Niveles de CAP</p>",
                         unsafe_allow_html=True,
                     )
                     fit_data = [
@@ -1798,9 +1775,9 @@ with tab_cand:
                     pct_a = round(alto  / total_f * 100, 1)
 
                     segments = []
-                    if bajo  > 0: segments.append((pct_b, bajo,  "#4ade80", "Bajo"))
-                    if medio > 0: segments.append((pct_m, medio, "#ffab48", "Medio"))
                     if alto  > 0: segments.append((pct_a, alto,  "#e03131", "Alto"))
+                    if medio > 0: segments.append((pct_m, medio, "#ffab48", "Medio"))
+                    if bajo  > 0: segments.append((pct_b, bajo,  "#4ade80", "Bajo"))
 
                     bar_html = "".join(
                         f"<div style='width:{pct}%;background:{color};height:100%;"
@@ -1960,17 +1937,15 @@ with tab_cand:
 # ═══════════════════════════════════════════════════════════════════════════════
 with tab_recal:
 
-    # ── Header row: title + perfil/proceso toggle
-    h1, h2 = st.columns([3, 1])
-    with h1:
+    # ── Header: title+toggle on left, KPIs on right (placeholder filled after data)
+    header_left, header_right = st.columns([2.5, 0.8], gap="large")
+    with header_left:
         st.markdown("<div class='section-title'>Recalibración</div>", unsafe_allow_html=True)
         st.markdown(
-            "<p style='font-size:0.85rem;color:#7a7a9d;margin:-8px 0 12px 0;'>"
+            "<p style='font-size:0.85rem;color:#7a7a9d;margin:-8px 0 10px 0;'>"
             "Identifica perfiles que requieren ajuste según la distribución de candidatos Adecuados.</p>",
             unsafe_allow_html=True,
         )
-    with h2:
-        st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
         recal_modo = st.radio(
             "",
             options=["Perfil", "Proceso"],
@@ -1978,27 +1953,28 @@ with tab_recal:
             horizontal=True,
             label_visibility="collapsed",
         )
+    kpi_placeholder = header_right.empty()
 
     # ── Threshold controls
     st.markdown(
         "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;"
-        "color:#2d2a5e;margin-bottom:4px;'>⚙️ Parámetros de evaluación</p>",
+        "color:#2d2a5e;margin:12px 0 4px 0;'>⚙️ Parámetros de evaluación</p>",
         unsafe_allow_html=True,
     )
     ctrl1, ctrl2, ctrl3 = st.columns(3, gap="medium")
     with ctrl1:
-        umbral_flexible = st.number_input(
-            "Perfil muy flexible — Adecuados superan (%)",
-            min_value=1, max_value=99, value=30, step=1,
-            help="Procesos donde el % de Adecuados supera este valor se consideran demasiado permisivos.",
-            key="umbral_flexible",
-        )
-    with ctrl2:
         umbral_exigente = st.number_input(
             "Perfil muy exigente — Adecuados menores a (%)",
             min_value=1, max_value=99, value=10, step=1,
             help="Procesos donde el % de Adecuados es menor a este valor se consideran demasiado exigentes.",
             key="umbral_exigente",
+        )
+    with ctrl2:
+        umbral_flexible = st.number_input(
+            "Perfil muy flexible — Adecuados superan (%)",
+            min_value=1, max_value=99, value=30, step=1,
+            help="Procesos donde el % de Adecuados supera este valor se consideran demasiado permisivos.",
+            key="umbral_flexible",
         )
     with ctrl3:
         st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
@@ -2099,36 +2075,39 @@ with tab_recal:
             exigentes = [e for e in exigentes if e["pct_adeq"] < umbral_exigente]
 
         flexibles.sort(key=lambda x: -x["pct_adeq"])
-        exigentes.sort(key=lambda x:  x["pct_adeq"])
-
-    # ── KPI summary row
-    k1, k2, k3 = st.columns(3)
-    k1.markdown(f"""
-    <div class='metric-card'>
-      <div class='label'>Perfiles muy flexibles</div>
-      <div class='value' style='color:#ffab48;'>{len(flexibles)}</div>
-      <span class='badge badge-media'>Adecuados &gt; {umbral_flexible}%</span>
-    </div>""", unsafe_allow_html=True)
-    k2.markdown(f"""
-    <div class='metric-card'>
-      <div class='label'>Perfiles muy exigentes</div>
-      <div class='value' style='color:#e03131;'>{len(exigentes)}</div>
-      <span class='badge badge-alta'>Adecuados &lt; {umbral_exigente}%</span>
-    </div>""", unsafe_allow_html=True)
     total_ok = len(df_recal) - len(flexibles) - len(exigentes) if not df_recal_src.empty else 0
-    k3.markdown(f"""
-    <div class='metric-card'>
-      <div class='label'>Perfiles en rango óptimo</div>
-      <div class='value' style='color:#4ade80;'>{total_ok}</div>
-      <span class='badge badge-baja'>Entre {umbral_exigente}% y {umbral_flexible}%</span>
-    </div>""", unsafe_allow_html=True)
 
-    st.markdown("<br>", unsafe_allow_html=True)
+    # ── Fill KPI placeholder (right column of header)
+    kpi_placeholder.markdown(
+        f"<div style='display:flex;flex-direction:column;gap:6px;'>"
+        f"<div style='background:{CARD_BG};border-radius:8px;padding:12px 14px;"
+        f"border-left:3px solid #ffab48;display:flex;align-items:center;justify-content:center;gap:12px;'>"
+        f"<div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:700;color:#ffab48;line-height:1;'>{len(flexibles)}</div>"
+        f"<div style='text-align:left;'>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};text-transform:uppercase;letter-spacing:0.05em;line-height:1.3;'>Muy flexibles</div>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};'>&gt; {umbral_flexible}%</div>"
+        f"</div></div>"
+        f"<div style='background:{CARD_BG};border-radius:8px;padding:12px 14px;"
+        f"border-left:3px solid #4ade80;display:flex;align-items:center;justify-content:center;gap:12px;'>"
+        f"<div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:700;color:#4ade80;line-height:1;'>{total_ok}</div>"
+        f"<div style='text-align:left;'>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};text-transform:uppercase;letter-spacing:0.05em;line-height:1.3;'>Rango óptimo</div>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};'>{umbral_exigente}%–{umbral_flexible}%</div>"
+        f"</div></div>"
+        f"<div style='background:{CARD_BG};border-radius:8px;padding:12px 14px;"
+        f"border-left:3px solid #e03131;display:flex;align-items:center;justify-content:center;gap:12px;'>"
+        f"<div style='font-family:Syne,sans-serif;font-size:2rem;font-weight:700;color:#e03131;line-height:1;'>{len(exigentes)}</div>"
+        f"<div style='text-align:left;'>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};text-transform:uppercase;letter-spacing:0.05em;line-height:1.3;'>Muy exigentes</div>"
+        f"<div style='font-size:0.72rem;color:{LIGHT_TEXT};'>&lt; {umbral_exigente}%</div>"
+        f"</div></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-    # ── Two column tables
-    col_flex, col_exig = st.columns(2, gap="large")
+    # ── Tables
 
-    def build_recal_table(items, color, label_pct, title, icon):
+    def build_recal_table(items, color, label_pct, title, icon, modo):
         if not items:
             return (
                 f"<div style='background:white;border-radius:10px;padding:28px 20px;"
@@ -2138,57 +2117,398 @@ with tab_recal:
                 f"con los parámetros actuales.</p></div>"
             )
         rows = ""
-        for e in items:
-            bar_pct = round(e["pct_adeq"])
-            rows += (
-                f"<tr style='border-bottom:1px solid #f0eeff;'>"
-                f"<td style='padding:10px 14px;font-size:0.84rem;color:#2d2a5e;font-weight:500;'>"
-                f"{e.get('display_name', e['profile_name'])}</td>"
-                f"<td style='padding:10px 14px;'>"
-                f"<div style='display:flex;align-items:center;gap:8px;'>"
-                f"<div style='background:#eeecf7;border-radius:20px;height:7px;width:80px;flex-shrink:0;'>"
-                f"<div style='background:{color};border-radius:20px;height:7px;width:{min(bar_pct,100)}%;'></div></div>"
-                f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;color:{color};'>"
-                f"{e['pct_adeq']}%</span></div></td>"
-                f"<td style='padding:10px 14px;text-align:center;font-size:0.82rem;color:#7a7a9d;'>"
-                f"{e['adecuado']}<span style='font-size:0.72rem;'> / {e['total_fit']}</span></td>"
-                f"</tr>"
+        if modo == "Proceso":
+            items_sorted = sorted(items, key=lambda x: (x["profile_name"], -x["pct_adeq"]))
+            grouped = {}
+            for e in items_sorted:
+                grouped.setdefault(e["profile_name"], []).append(e)
+            for profile, group_items in grouped.items():
+                n = len(group_items)
+                for idx, e in enumerate(group_items):
+                    bar_pct = round(e["pct_adeq"])
+                    pid = e.get("processId", "")
+                    if pid:
+                        safe_pid = pid.replace("'", "").replace('"', '')
+                        copy_btn = (
+                            f"<button class='copy-btn' data-pid='{safe_pid}' "
+                            f"title='{safe_pid}'>⎘</button>"
+                        )
+                    else:
+                        copy_btn = ""
+                    if idx == 0:
+                        profile_cell = (
+                            f"<td rowspan='{n}' style='padding:10px 14px;font-size:0.8rem;"
+                            f"color:#7a7a9d;font-weight:600;vertical-align:middle;"
+                            f"border-right:2px solid #f0eeff;border-bottom:1px solid #f0eeff;"
+                            f"background:#faf9ff;'>{profile}</td>"
+                        )
+                    else:
+                        profile_cell = ""
+                    rows += (
+                        f"<tr style='border-bottom:1px solid #f0eeff;'>"
+                        f"{profile_cell}"
+                        f"<td style='padding:10px 14px;font-size:0.84rem;color:#2d2a5e;font-weight:500;'>"
+                        f"{e.get('display_name', e['profile_name'])}{copy_btn}</td>"
+                        f"<td style='padding:10px 14px;'>"
+                        f"<div style='display:flex;align-items:center;gap:8px;'>"
+                        f"<div style='background:#eeecf7;border-radius:20px;height:7px;width:80px;flex-shrink:0;'>"
+                        f"<div style='background:{color};border-radius:20px;height:7px;width:{min(bar_pct,100)}%;'></div></div>"
+                        f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;color:{color};'>"
+                        f"{e['pct_adeq']}%</span></div></td>"
+                        f"<td style='padding:10px 14px;text-align:center;font-size:0.82rem;color:#7a7a9d;'>"
+                        f"{e['adecuado']}<span style='font-size:0.72rem;'> / {e['total_fit']}</span></td>"
+                        f"</tr>"
+                    )
+            perfil_th = (
+                f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+                f"letter-spacing:0.05em;text-align:left;width:130px;'>Perfil</th>"
             )
+            proceso_th = (
+                f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+                f"letter-spacing:0.05em;text-align:left;'>Proceso</th>"
+            )
+        else:
+            for e in items:
+                bar_pct = round(e["pct_adeq"])
+                rows += (
+                    f"<tr style='border-bottom:1px solid #f0eeff;'>"
+                    f"<td style='padding:10px 14px;font-size:0.84rem;color:#2d2a5e;font-weight:500;'>"
+                    f"{e.get('display_name', e['profile_name'])}</td>"
+                    f"<td style='padding:10px 14px;'>"
+                    f"<div style='display:flex;align-items:center;gap:8px;'>"
+                    f"<div style='background:#eeecf7;border-radius:20px;height:7px;width:80px;flex-shrink:0;'>"
+                    f"<div style='background:{color};border-radius:20px;height:7px;width:{min(bar_pct,100)}%;'></div></div>"
+                    f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:0.9rem;color:{color};'>"
+                    f"{e['pct_adeq']}%</span></div></td>"
+                    f"<td style='padding:10px 14px;text-align:center;font-size:0.82rem;color:#7a7a9d;'>"
+                    f"{e['adecuado']}<span style='font-size:0.72rem;'> / {e['total_fit']}</span></td>"
+                    f"</tr>"
+                )
+            perfil_th = (
+                f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
+                f"letter-spacing:0.05em;text-align:left;'>Perfil</th>"
+            )
+            proceso_th = ""
         return (
             f"<div style='background:white;border-radius:10px;overflow:hidden;"
             f"box-shadow:0 2px 10px rgba(0,0,0,0.06);'>"
             f"<div style='max-height:480px;overflow-y:auto;'>"
             f"<table style='width:100%;border-collapse:collapse;'>"
             f"<thead><tr style='background:{SIDEBAR_BG};'>"
-            f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
-            f"letter-spacing:0.05em;text-align:left;'>Perfil</th>"
+            f"{perfil_th}{proceso_th}"
             f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
             f"letter-spacing:0.05em;text-align:left;width:130px;'>% Adecuados</th>"
             f"<th style='padding:10px 14px;color:white;font-size:0.78rem;text-transform:uppercase;"
             f"letter-spacing:0.05em;text-align:center;width:80px;'>Adeq / Total</th>"
             f"</tr></thead>"
-            f"<tbody>{rows}</tbody>"
+            f"<tbody>{{rows}}</tbody>"
             f"</table></div></div>"
-        )
+        ).format(rows=rows)
 
-    with col_flex:
-        st.markdown(
-            f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;"
-            f"color:#b06000;margin-bottom:10px;'>🟡 Muy flexibles "
-            f"<span style='font-size:0.8rem;font-weight:400;color:#7a7a9d;'>"
-            f"(Adecuados &gt; {umbral_flexible}%)</span></p>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(build_recal_table(flexibles, "#ffab48", "pct_adeq", "flexible", "🟡"),
-                    unsafe_allow_html=True)
+    col_flex, col_exig = st.columns(2, gap="large")
 
-    with col_exig:
-        st.markdown(
-            f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;"
-            f"color:#b30000;margin-bottom:10px;'>🔴 Muy exigentes "
-            f"<span style='font-size:0.8rem;font-weight:400;color:#7a7a9d;'>"
-            f"(Adecuados &lt; {umbral_exigente}%)</span></p>",
-            unsafe_allow_html=True,
-        )
-        st.markdown(build_recal_table(exigentes, "#e03131", "pct_adeq", "exigente", "🔴"),
-                    unsafe_allow_html=True)
+    def render_recal_table(col, items, color, label, modo):
+        table_html = build_recal_table(items, color, "pct_adeq", label, "", modo)
+        with col:
+            st.markdown(
+                f"<p style='font-family:Syne,sans-serif;font-weight:700;font-size:1rem;"
+                f"color:{'#b06000' if 'flex' in label else '#b30000'};margin-bottom:10px;'>"
+                f"{'🟡 Muy flexibles' if 'flex' in label else '🔴 Muy exigentes'} "
+                f"<span style='font-size:0.8rem;font-weight:400;color:#7a7a9d;'>"
+                f"({'Adecuados &gt; ' + str(umbral_flexible) + '%' if 'flex' in label else 'Adecuados &lt; ' + str(umbral_exigente) + '%'})"
+                f"</span></p>",
+                unsafe_allow_html=True,
+            )
+            if recal_modo == "Proceso":
+                # Use components.html so JS clipboard works
+                full_html = f"""
+                <style>
+                  body {{margin:0;font-family:'DM Sans',sans-serif;background:transparent;}}
+                  table {{width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden;font-size:0.84rem;}}
+                  thead tr {{background:#1e1b4b;}}
+                  th {{padding:10px 12px;color:white;font-size:0.75rem;text-transform:uppercase;letter-spacing:0.05em;text-align:left;}}
+                  td {{padding:9px 12px;border-bottom:1px solid #f0eeff;color:#2d2a5e;vertical-align:middle;}}
+                  .perfil-cell {{font-size:0.78rem;color:#9d8fc4;font-weight:600;background:#faf9ff;border-right:2px solid #f0eeff;}}
+                  .bar-wrap {{background:#eeecf7;border-radius:20px;height:7px;width:80px;display:inline-block;}}
+                  .bar-fill {{border-radius:20px;height:7px;background:{color};}}
+                  .pct {{font-weight:700;color:{color};font-size:0.9rem;margin-left:6px;}}
+                  .copy-btn {{background:none;border:1px solid #e0dbf7;border-radius:6px;
+                    padding:1px 7px;font-size:0.68rem;color:#9d8fc4;cursor:pointer;margin-left:6px;}}
+                  .copy-btn:hover {{background:#f0eeff;}}
+                  .copied {{color:#4ade80;border-color:#4ade80;}}
+                </style>
+                {table_html.replace('<div style=', '<div data-x=').replace('</div>', '</div>').replace('data-x=', 'style=')}
+                <script>
+                  document.querySelectorAll('.copy-btn').forEach(btn => {{
+                    btn.addEventListener('click', function() {{
+                      const pid = this.getAttribute('data-pid');
+                      const ta = document.createElement('textarea');
+                      ta.value = pid;
+                      ta.style.position = 'fixed';
+                      ta.style.opacity = '0';
+                      document.body.appendChild(ta);
+                      ta.focus(); ta.select();
+                      document.execCommand('copy');
+                      document.body.removeChild(ta);
+                      this.textContent = '✓';
+                      this.classList.add('copied');
+                      setTimeout(() => {{ this.textContent = '⎘'; this.classList.remove('copied'); }}, 1500);
+                    }});
+                  }});
+                </script>
+                """
+                # Estimate height: grouped rows so count unique processes
+                n_rows = len(items)  # each entry = one process row
+                n_groups = len(set(e["profile_name"] for e in items))
+                height = min(600, max(120, n_rows * 46 + n_groups * 4 + 52))
+                components.html(full_html, height=height, scrolling=False)
+            else:
+                st.markdown(table_html, unsafe_allow_html=True)
+
+    render_recal_table(col_flex, flexibles, "#ffab48", "flex", recal_modo)
+    render_recal_table(col_exig, exigentes, "#e03131", "exig", recal_modo)
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAB TRUST — TEST DE CONFIABILIDAD
+# ═══════════════════════════════════════════════════════════════════════════════
+with tab_trust:
+
+    df_trust_raw = sheets.get("resumen TRUST", pd.DataFrame())
+    df_cand_raw_trust = sheets.get("resumen_candidatos", pd.DataFrame())
+
+    if df_trust_raw.empty:
+        st.warning("El archivo no contiene la hoja 'resumen TRUST'.")
+    else:
+        # Build trust candidatos from resumen_candidatos (only CONFIABILIDAD rows)
+        df_cand_trust = pd.DataFrame()
+        if not df_cand_raw_trust.empty:
+            df_cand_trust = df_cand_raw_trust[
+                df_cand_raw_trust["profile_name"].str.upper().str.contains("CONFIABILIDAD", na=False)
+            ].copy()
+            df_cand_trust = apply_date_filter(df_cand_trust)
+
+        # Filter trust sheet by date
+        df_trust_all = apply_date_filter(df_trust_raw) if date_filter_active else df_trust_raw.copy()
+
+        # Identify TRUST processIds
+        df_trust_sheet_t = sheets.get("resumen TRUST", pd.DataFrame())
+        trust_pids_t = set(df_trust_sheet_t["processId"].dropna().unique().tolist()) if not df_trust_sheet_t.empty else set()
+
+        # Layout
+        col_proc_t, col_dash_t = st.columns([1, 2.6], gap="large")
+
+        with col_proc_t:
+            st.markdown("<div class='section-title' style='margin-bottom:6px;'>Seleccionar por</div>", unsafe_allow_html=True)
+            modo_t = st.radio(
+                "", options=["Perfil", "Proceso"], key="trust_modo",
+                horizontal=True, label_visibility="collapsed",
+            )
+            st.markdown("<div style='height:2px'></div>", unsafe_allow_html=True)
+
+            if modo_t == "Proceso":
+                dp_t = df_detalle_global[["processId","processName"]].dropna() if (
+                    not df_detalle_global.empty and "processName" in df_detalle_global.columns
+                ) else pd.DataFrame()
+                if not dp_t.empty:
+                    dp_t = dp_t[dp_t["processId"].isin(trust_pids_t)].drop_duplicates(subset="processId")
+                trust_proc_opts = [("__all__", "Todos los procesos TRUST", None)]
+                for _, r in dp_t.iterrows():
+                    trust_proc_opts.append((r["processId"], r["processName"], r["processName"]))
+            else:
+                unique_trust_profiles = sorted(df_trust_raw["profile_name"].dropna().unique().tolist())
+                trust_proc_opts = [("__all__", "Todos los perfiles TRUST", None)]
+                for pname in unique_trust_profiles:
+                    trust_proc_opts.append(("__profile__", pname, pname))
+
+            trust_radio_labels = [o[1] for o in trust_proc_opts]
+            trust_selected = st.radio(
+                "", options=trust_radio_labels,
+                key="trust_proc_selector", label_visibility="collapsed",
+            )
+            st.markdown(
+                "<p style='font-size:0.75rem;color:#7a7a9d;margin-top:6px;'>↑ Desplázate para ver todos</p>",
+                unsafe_allow_html=True,
+            )
+
+        with col_dash_t:
+            t_match = next((o for o in trust_proc_opts if o[1] == trust_selected), None)
+            t_global = True
+            t_pid    = None
+            t_pname  = None
+
+            if t_match and t_match[0] == "__all__":
+                df_trust_view = df_trust_all.copy()
+                df_cand_view  = df_cand_trust.copy()
+                title_t = trust_selected
+            elif t_match and t_match[0] == "__profile__":
+                t_pname = t_match[2]
+                df_trust_view = df_trust_all[df_trust_all["profile_name"] == t_pname].copy()
+                df_cand_view  = df_cand_trust[df_cand_trust["profile_name"] == t_pname].copy() if not df_cand_trust.empty else pd.DataFrame()
+                title_t = t_pname
+                t_global = False
+            elif t_match:
+                t_pid = t_match[0]
+                t_pname = t_match[2]
+                df_trust_view = df_trust_all[df_trust_all["processId"] == t_pid].copy()
+                df_cand_view  = df_cand_trust[df_cand_trust["processId"] == t_pid].copy() if not df_cand_trust.empty else pd.DataFrame()
+                title_t = t_pname
+                t_global = False
+            else:
+                df_trust_view = df_trust_all.copy()
+                df_cand_view  = df_cand_trust.copy()
+                title_t = trust_selected
+
+            # Dates
+            t_date_html = ""
+            if not df_detalle_global.empty and "startDate" in df_detalle_global.columns:
+                if t_pid:
+                    det_t = df_detalle_global[df_detalle_global["processId"] == t_pid]
+                    if not det_t.empty:
+                        s = pd.to_datetime(det_t["startDate"], errors="coerce").dropna()
+                        e = pd.to_datetime(det_t["endDate"],   errors="coerce").dropna() if "endDate" in det_t.columns else pd.Series()
+                        if len(s):
+                            t_date_html = (
+                                f"<span style='font-size:0.82rem;color:#7a7a9d;'>"
+                                f"Desde <b style='color:#2d2a5e;'>{s.min().strftime('%d/%m/%Y')}</b>"
+                                + (f"&nbsp;·&nbsp;Hasta <b style='color:#2d2a5e;'>{e.max().strftime('%d/%m/%Y')}</b>" if len(e) else "")
+                                + "</span>"
+                            )
+
+            st.markdown(
+                f"<div style='display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;'>"
+                f"<div class='section-title' style='margin-bottom:4px;'>{title_t}</div>"
+                f"{t_date_html}</div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── KPI total candidatos
+            total_t_cands = int(df_cand_view["total_candidates"].sum()) if not df_cand_view.empty and "total_candidates" in df_cand_view.columns else len(df_trust_view)
+            st.markdown(
+                f"<div class='metric-card' style='text-align:left;padding:16px 24px;margin-bottom:16px;'>"
+                f"<span style='font-size:0.78rem;color:{LIGHT_TEXT};text-transform:uppercase;letter-spacing:0.06em;'>Total evaluados</span>"
+                f"<span style='font-family:Syne,sans-serif;font-size:2rem;font-weight:700;color:white;margin-left:16px;'>{total_t_cands:,}</span>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # ── Two charts: Estado de candidatos + Confiabilidad
+            ch_t1, ch_t2 = st.columns(2, gap="medium")
+
+            with ch_t1:
+                st.markdown(
+                    "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;"
+                    "color:#2d2a5e;margin-bottom:8px;'>Estado de candidatos</p>",
+                    unsafe_allow_html=True,
+                )
+                def col_sum_t(df_, col):
+                    return int(df_[col].sum()) if not df_.empty and col in df_.columns else 0
+
+                t_disq  = col_sum_t(df_cand_view, "DISQUALIFIED")
+                t_ended = col_sum_t(df_cand_view, "ENDED")
+                t_inp   = col_sum_t(df_cand_view, "INPROGRESS")
+                t_open  = col_sum_t(df_cand_view, "OPEN")
+                t_total_status = t_disq + t_ended + t_inp + t_open or 1
+
+                status_t = [
+                    ("Descalificado", t_disq,  round(t_disq/t_total_status*100,1),  "#e03131","#ffe8e8","#b30000"),
+                    ("Finalizado",    t_ended,  round(t_ended/t_total_status*100,1), "#4ade80","#e3f7ee","#007a42"),
+                    ("En progreso",   t_inp,    round(t_inp/t_total_status*100,1),   "#ffab48","#fff3dc","#b06000"),
+                    ("Sin iniciar",   t_open,   round(t_open/t_total_status*100,1),  "#60a5fa","#e0f0ff","#1a5fa8"),
+                ]
+                pills_t = "".join(
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                    f"padding:8px 14px;margin-bottom:6px;border-radius:8px;background:{bg};'>"
+                    f"<span style='font-size:0.85rem;font-weight:500;color:{fg};'>{lbl}</span>"
+                    f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:1.05rem;color:{fg};'>"
+                    f"{pct}% <span style='font-size:0.75rem;font-weight:400;color:{fg}aa;'>({n:,})</span></span></div>"
+                    for lbl, n, pct, color, bg, fg in status_t
+                )
+                st.markdown(pills_t, unsafe_allow_html=True)
+                fig_st_t = go.Figure(go.Pie(
+                    labels=[r[0] for r in status_t], values=[r[1] for r in status_t],
+                    hole=0.58, marker=dict(colors=[r[3] for r in status_t], line=dict(color="#f4f3f8", width=2)),
+                    textinfo="percent", textfont=dict(size=11, family="DM Sans"),
+                ))
+                fig_st_t.update_layout(
+                    margin=dict(t=0, b=0, l=0, r=0), height=220,
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.25, font=dict(size=11)),
+                    annotations=[dict(text=f"<b>{total_t_cands:,}</b><br><span style='font-size:10px'>total</span>",
+                                      x=0.5, y=0.5, font=dict(size=13, family="Syne", color="#2d2a5e"), showarrow=False)],
+                )
+                st.plotly_chart(fig_st_t, use_container_width=True)
+
+            with ch_t2:
+                st.markdown(
+                    "<p style='font-family:Syne,sans-serif;font-weight:700;font-size:0.95rem;"
+                    "color:#2d2a5e;margin-bottom:8px;'>🔒 Resultado de Confiabilidad</p>",
+                    unsafe_allow_html=True,
+                )
+                conf_c = df_trust_view["Confiabilidad_type"].value_counts() if "Confiabilidad_type" in df_trust_view.columns else pd.Series()
+                conf_d = [
+                    ("Confiable",          conf_c.get("Confiable", 0),          "#4ade80","#e3f7ee","#007a42"),
+                    ("Confiabilidad Media", conf_c.get("Confiabilidad Media", 0),"#ffab48","#fff3dc","#b06000"),
+                    ("No Confiable",        conf_c.get("No Confiable", 0),       "#e03131","#ffe8e8","#b30000"),
+                ]
+                total_conf = sum(r[1] for r in conf_d) or 1
+                pills_conf = "".join(
+                    f"<div style='display:flex;justify-content:space-between;align-items:center;"
+                    f"padding:8px 14px;margin-bottom:6px;border-radius:8px;background:{bg};'>"
+                    f"<span style='font-size:0.85rem;font-weight:500;color:{fg};'>{lbl}</span>"
+                    f"<span style='font-family:Syne,sans-serif;font-weight:700;font-size:1.05rem;color:{fg};'>"
+                    f"{round(n/total_conf*100,1)}% <span style='font-size:0.75rem;font-weight:400;color:{fg}aa;'>({n:,})</span></span></div>"
+                    for lbl, n, color, bg, fg in conf_d
+                )
+                st.markdown(pills_conf, unsafe_allow_html=True)
+                fig_conf = go.Figure(go.Pie(
+                    labels=[r[0] for r in conf_d], values=[r[1] for r in conf_d],
+                    hole=0.58, marker=dict(colors=[r[2] for r in conf_d], line=dict(color="#f4f3f8", width=2)),
+                    textinfo="percent", textfont=dict(size=11, family="DM Sans"),
+                ))
+                fig_conf.update_layout(
+                    margin=dict(t=0, b=0, l=0, r=0), height=220,
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, font=dict(size=10)),
+                    annotations=[dict(text=f"<b>{sum(r[1] for r in conf_d):,}</b><br><span style='font-size:10px'>evaluados</span>",
+                                      x=0.5, y=0.5, font=dict(size=13, family="Syne", color="#2d2a5e"), showarrow=False)],
+                )
+                st.plotly_chart(fig_conf, use_container_width=True)
+
+            # ── Factores de Riesgo
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown("<div class='section-title'>Factores de Riesgo TRUST</div>", unsafe_allow_html=True)
+
+            TRUST_FACTORS = ["INTEGRIDAD","ROBO","MENTIRA","ALCOHOL Y DROGAS","MOBBING","VIOLENCIA","ACOSO SEXUAL","RIESGO INFORMÁTICO"]
+            for factor in TRUST_FACTORS:
+                type_col = f"{factor}_type"
+                if type_col not in df_trust_view.columns:
+                    continue
+                counts_f = df_trust_view[type_col].value_counts()
+                total_f  = counts_f.sum()
+                if total_f == 0:
+                    continue
+                bajo  = counts_f.get("riesgo bajo",  0)
+                medio = counts_f.get("riesgo medio", 0)
+                alto  = counts_f.get("riesgo alto",  0)
+                segments = []
+                if alto  > 0: segments.append((round(alto/total_f*100,1),  alto,  "#e03131"))
+                if medio > 0: segments.append((round(medio/total_f*100,1), medio, "#ffab48"))
+                if bajo  > 0: segments.append((round(bajo/total_f*100,1),  bajo,  "#4ade80"))
+                bar_html = "".join(
+                    f"<div style='width:{pct}%;background:{color};height:100%;display:flex;"
+                    f"align-items:center;justify-content:center;font-size:0.72rem;font-weight:700;"
+                    f"color:white;min-width:30px;'>{pct}%</div>"
+                    for pct, n, color in segments
+                )
+                alert = (
+                    f"<span style='background:#ffe8e8;color:#b30000;border-radius:20px;"
+                    f"padding:2px 10px;font-size:0.72rem;font-weight:700;margin-left:8px;'>"
+                    f"⚠ {alto} riesgo alto</span>"
+                ) if alto > 0 else ""
+                st.markdown(
+                    f"<div style='margin-bottom:10px;'>"
+                    f"<div style='display:flex;align-items:center;margin-bottom:4px;'>"
+                    f"<span style='font-size:0.85rem;font-weight:600;color:#2d2a5e;'>{factor}</span>{alert}</div>"
+                    f"<div style='display:flex;height:28px;border-radius:6px;overflow:hidden;background:#eeecf7;'>"
+                    f"{bar_html}</div></div>",
+                    unsafe_allow_html=True,
+                )
