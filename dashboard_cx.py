@@ -596,8 +596,8 @@ else:
             date_filter_active = True
 
 # ── Main tabs ─────────────────────────────────────────────────────────────────
-tab_dif, tab_rank, tab_comp, tab_comps, tab_cap, tab_trust, tab_recal = st.tabs([
-    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 CAP", "🔒 TRUST", "🔧 Recalibración"
+tab_dif, tab_rank, tab_comp, tab_comps, tab_cap, tab_recal, tab_trust = st.tabs([
+    "📊 Nivel del Cargo", "🏆 Ranking Perfiles", "🧩 Componentes", "🎯 Competencias", "👥 CAP", "🔧 Recalibración", "🔒 TRUST"
 ])
 
 
@@ -661,11 +661,11 @@ with tab_dif:
                 return "—", "—"
             # avg number of competencias per profile
             counts = rows[comp_cols_dif].notna().sum(axis=1)
-            avg_count = round(counts.mean(), 1) if len(counts) else "—"
+            avg_count = round(counts.mean()) if len(counts) else "—"
             # avg expected value across all competencias used
             all_vals = rows[comp_cols_dif].values.flatten()
             all_vals = [v for v in all_vals if pd.notna(v)]
-            avg_val = round(sum(all_vals) / len(all_vals), 1) if all_vals else "—"
+            avg_val = round(sum(all_vals) / len(all_vals)) if all_vals else "—"
             return avg_count, avg_val
 
         rows_html = ""
@@ -691,8 +691,8 @@ with tab_dif:
             )
 
         # Total row
-        total_avg_c = round(sum(total_avg_count_vals) / len(total_avg_count_vals), 1) if total_avg_count_vals else "—"
-        total_avg_v = round(sum(total_avg_val_vals)   / len(total_avg_val_vals),   1) if total_avg_val_vals   else "—"
+        total_avg_c = round(sum(total_avg_count_vals) / len(total_avg_count_vals)) if total_avg_count_vals else "—"
+        total_avg_v = round(sum(total_avg_val_vals) / len(total_avg_val_vals)) if total_avg_val_vals   else "—"
         rows_html += (
             f"<tr style='background:#f7f5ff;'>"
             f"<td><span style='color:#2d2a5e;font-weight:700;'>Total</span></td>"
@@ -1039,24 +1039,25 @@ with tab_comp:
     NIVEL_ORDER  = ["Alta", "Media", "Baja"]
     NIVEL_COLORS = {"Alta": ("#ffe0eb","#c0005a"), "Media": ("#fff3dc","#b06000"), "Baja": ("#e3f7ee","#007a42")}
 
-    # ── Build cell data: for each (nivel, comp) → {used, avg_weight}
+    # ── Build cell data: for each (nivel, comp) → {pct_uso, avg_weight}
     cell_data = {}
     for nivel in NIVEL_ORDER:
         sub = df_tab1[df_tab1["dificultad"] == nivel]
+        total_perfiles_nivel = len(sub)
         cell_data[nivel] = {}
         for comp, label in active_comps:
             active_rows = sub[sub[comp].notna()]
             if len(active_rows) == 0:
                 cell_data[nivel][comp] = None
                 continue
+            pct_uso = round(len(active_rows) / total_perfiles_nivel * 100) if total_perfiles_nivel else 0
             w_col = f"{comp}_weight"
             if w_col in sub.columns:
                 w_vals = active_rows[w_col].dropna()
                 avg_w  = round(w_vals.mean(), 1) if len(w_vals) else None
             else:
-                # detalle_perfiles: comp column IS the weight
                 avg_w = round(float(active_rows[comp].mean()), 1)
-            cell_data[nivel][comp] = {"usos": len(active_rows), "avg_w": avg_w}
+            cell_data[nivel][comp] = {"pct_uso": pct_uso, "avg_w": avg_w}
 
     # ── Build header
     comp_headers = "".join(
@@ -1079,15 +1080,15 @@ with tab_comp:
         for comp, label in active_comps:
             data = cell_data[nivel].get(comp)
             if data:
-                avg_w = data["avg_w"]
-                usos  = data["usos"]
-                w_txt = f"{avg_w}%" if avg_w is not None else "—"
+                avg_w   = data["avg_w"]
+                pct_uso = data["pct_uso"]
+                w_txt   = f"{avg_w}%" if avg_w is not None else "—"
                 comp_cells += (
                     f"<td style='padding:12px 12px;text-align:center;'>"
-                    f"<div style='display:flex;flex-direction:column;align-items:center;gap:3px;'>"
-                    f"<span style='background:#e3f7ee;color:#007a42;border-radius:20px;"
-                    f"padding:2px 10px;font-size:0.75rem;font-weight:700;'>✓ {usos} uso{'s' if usos>1 else ''}</span>"
-                    f"<span style='font-size:0.78rem;color:#2d2a5e;font-weight:600;'>{w_txt}</span>"
+                    f"<div style='display:flex;flex-direction:column;align-items:center;gap:4px;'>"
+                    f"<span style='font-family:Syne,sans-serif;font-size:1rem;font-weight:700;"
+                    f"color:#2d2a5e;'>{pct_uso}%</span>"
+                    f"<span style='font-size:0.72rem;color:#7a7a9d;'>Peso esp. {w_txt}</span>"
                     f"</div></td>"
                 )
             else:
@@ -1234,14 +1235,11 @@ with tab_comps:
     # ── KPIs
     top_name = comp_stats[0]["comp"] if comp_stats else "—"
     top_usos = comp_stats[0]["usos"] if comp_stats else 0
-    kk1, kk2, kk3 = st.columns(3)
+    kk1, kk2 = st.columns(2)
     kk1.markdown(f"<div class='metric-card'><div class='label'>Competencias únicas</div>"
                  f"<div class='value'>{len(comp_stats)}</div>"
                  f"<span class='badge badge-baja'>en este reporte</span></div>", unsafe_allow_html=True)
-    kk2.markdown(f"<div class='metric-card'><div class='label'>Total de usos</div>"
-                 f"<div class='value'>{total_usos_c}</div>"
-                 f"<span class='badge badge-media'>asignaciones totales</span></div>", unsafe_allow_html=True)
-    kk3.markdown(f"<div class='metric-card'><div class='label'>Competencia #1</div>"
+    kk2.markdown(f"<div class='metric-card'><div class='label'>Competencia #1</div>"
                  f"<div class='value' style='font-size:1.05rem;line-height:1.3;padding:4px 0;'>{top_name}</div>"
                  f"<span class='badge badge-alta'>{top_usos} usos</span></div>", unsafe_allow_html=True)
 
@@ -1259,7 +1257,7 @@ with tab_comps:
             pct_bar = round(uso / max_usos_c * 100)
             pct_tot = round(uso / total_usos_c * 100, 1) if total_usos_c else 0
             icon    = medal.get(i, f"<span style='font-family:Syne,sans-serif;font-weight:700;color:{ACCENT};font-size:0.9rem;'>#{i+1}</span>")
-            avg_esp_txt = f"{c['avg_esp']}"
+            avg_esp_txt = f"{round(c['avg_esp'])}"
             avg_res_txt = f"{c['avg_res']}" if c["avg_res"] is not None else "—"
 
             rows_uc += (
@@ -1293,7 +1291,7 @@ with tab_comps:
             f"<th style='padding:10px 10px;color:white;font-size:0.75rem;text-transform:uppercase;"
             f"letter-spacing:0.04em;text-align:left;width:130px;'>Usos</th>"
             f"<th style='padding:10px 10px;color:white;font-size:0.68rem;text-transform:uppercase;"
-            f"letter-spacing:0.03em;text-align:center;width:90px;'>Prom.<br>Esperado</th>"
+            f"letter-spacing:0.03em;text-align:center;width:90px;'>Valor<br>Esperado</th>"
             f"<th style='padding:10px 10px;color:white;font-size:0.68rem;text-transform:uppercase;"
             f"letter-spacing:0.03em;text-align:center;width:90px;'>Prom.<br>Obtenido</th>"
             f"</tr></thead>"
@@ -1457,29 +1455,40 @@ with tab_cap:
                 and "endDate" in df_det_dates.columns
             )
             if has_dates:
-                if sel_pid is None:
-                    # All processes — show earliest startDate
-                    all_starts = pd.to_datetime(df_det_dates["startDate"], errors="coerce").dropna()
-                    if len(all_starts):
-                        min_start = all_starts.min().strftime("%d/%m/%Y")
-                        date_html = (
-                            f"<span style='font-size:0.82rem;color:#7a7a9d;font-weight:400;'>"
-                            f"Desde <b style='color:#2d2a5e;'>{min_start}</b></span>"
-                        )
-                else:
+                if sel_pid is not None:
+                    # Specific process — startDate + endDate
                     det_proc = df_det_dates[df_det_dates["processId"] == sel_pid]
                     if not det_proc.empty:
                         starts = pd.to_datetime(det_proc["startDate"], errors="coerce").dropna()
                         ends   = pd.to_datetime(det_proc["endDate"],   errors="coerce").dropna()
                         if len(starts):
-                            start_txt = starts.min().strftime("%d/%m/%Y")
-                            end_txt   = ends.max().strftime("%d/%m/%Y") if len(ends) else "—"
                             date_html = (
                                 f"<span style='font-size:0.82rem;color:#7a7a9d;font-weight:400;'>"
-                                f"Desde <b style='color:#2d2a5e;'>{start_txt}</b>"
+                                f"Desde <b style='color:#2d2a5e;'>{starts.min().strftime('%d/%m/%Y')}</b>"
                                 f"&nbsp;&nbsp;·&nbsp;&nbsp;"
-                                f"Hasta <b style='color:#2d2a5e;'>{end_txt}</b></span>"
+                                f"Hasta <b style='color:#2d2a5e;'>{ends.max().strftime('%d/%m/%Y') if len(ends) else '—'}</b></span>"
                             )
+                elif sel_pname is not None:
+                    # Specific profile — min startDate + max endDate across all its processes
+                    det_prof = df_det_dates[df_det_dates["profile_name"] == sel_pname] if "profile_name" in df_det_dates.columns else pd.DataFrame()
+                    if not det_prof.empty:
+                        starts = pd.to_datetime(det_prof["startDate"], errors="coerce").dropna()
+                        ends   = pd.to_datetime(det_prof["endDate"],   errors="coerce").dropna()
+                        if len(starts):
+                            date_html = (
+                                f"<span style='font-size:0.82rem;color:#7a7a9d;font-weight:400;'>"
+                                f"Desde <b style='color:#2d2a5e;'>{starts.min().strftime('%d/%m/%Y')}</b>"
+                                f"&nbsp;&nbsp;·&nbsp;&nbsp;"
+                                f"Hasta <b style='color:#2d2a5e;'>{ends.max().strftime('%d/%m/%Y') if len(ends) else '—'}</b></span>"
+                            )
+                else:
+                    # Global — only earliest startDate
+                    all_starts = pd.to_datetime(df_det_dates["startDate"], errors="coerce").dropna()
+                    if len(all_starts):
+                        date_html = (
+                            f"<span style='font-size:0.82rem;color:#7a7a9d;font-weight:400;'>"
+                            f"Desde <b style='color:#2d2a5e;'>{all_starts.min().strftime('%d/%m/%Y')}</b></span>"
+                        )
 
             st.markdown(
                 f"<div style='display:flex;align-items:baseline;gap:20px;flex-wrap:wrap;'>"
@@ -1516,13 +1525,18 @@ with tab_cap:
             # ── KPI: total candidatos + componentes del proceso
             df_detalle = sheets.get("detalle_perfiles", pd.DataFrame())
 
-            # Get components for the selected process(es)
+            # Get components for the selected process(es) — dynamic based on selection
             comp_chips_html = ""
             if not df_detalle.empty:
-                if sel_pid is None:
-                    det_rows = df_detalle
-                else:
+                if sel_pid is not None:
+                    # Specific process
                     det_rows = df_detalle[df_detalle["processId"] == sel_pid] if "processId" in df_detalle.columns else pd.DataFrame()
+                elif sel_pname is not None:
+                    # Specific profile — all processes with this profile_name
+                    det_rows = df_detalle[df_detalle["profile_name"] == sel_pname] if "profile_name" in df_detalle.columns else pd.DataFrame()
+                else:
+                    # Global — all visible processes
+                    det_rows = apply_date_filter(df_detalle)
 
                 if not det_rows.empty:
                     comp_chip_data = []
