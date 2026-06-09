@@ -1372,6 +1372,18 @@ with tab_cap:
             df_trust_sheet = sheets.get("resumen TRUST", pd.DataFrame())
             trust_pids = set(df_trust_sheet["processId"].dropna().unique().tolist()) if not df_trust_sheet.empty else set()
 
+            def people_label(base_label, total):
+                total_int = int(total) if pd.notna(total) else 0
+                total_txt = f"{total_int:,}".replace(",", ".")
+                suffix = "persona" if total_int == 1 else "personas"
+                return f"{base_label}  [{total_txt} {suffix}]"
+
+            total_people_all = (
+                pd.to_numeric(df_cand_all["total_candidates"], errors="coerce").fillna(0).sum()
+                if "total_candidates" in df_cand_all.columns
+                else len(df_cand_all)
+            )
+
             if modo == "Proceso":
                 dp_names = df_detalle_global[["processId","processName"]].dropna() if (
                     not df_detalle_global.empty and "processName" in df_detalle_global.columns
@@ -1380,11 +1392,23 @@ with tab_cap:
                 if not dp_names.empty:
                     dp_names = dp_names[dp_names["processId"].isin(valid_pids)].drop_duplicates(subset="processId")
 
+                if "processId" in df_cand_all.columns and "total_candidates" in df_cand_all.columns:
+                    people_by_process = (
+                        df_cand_all.assign(total_candidates=pd.to_numeric(df_cand_all["total_candidates"], errors="coerce").fillna(0))
+                        .groupby("processId")["total_candidates"]
+                        .sum()
+                        .to_dict()
+                    )
+                elif "processId" in df_cand_all.columns:
+                    people_by_process = df_cand_all.groupby("processId").size().to_dict()
+                else:
+                    people_by_process = {}
+
                 # Count name repetitions to add suffix only when needed
                 name_counts = dp_names["processName"].value_counts() if not dp_names.empty else {}
                 name_seen   = {}
 
-                proc_options = [("__all__", "Todos los procesos", None, False)]
+                proc_options = [("__all__", people_label("Todos los procesos", total_people_all), None, False)]
                 for _, r in dp_names.iterrows():
                     if name_counts.get(r["processName"], 0) > 1:
                         idx   = name_seen.get(r["processName"], 1)
@@ -1392,13 +1416,25 @@ with tab_cap:
                         label = f"{r['processName']}  #{idx}"
                     else:
                         label = r["processName"]
-                    proc_options.append((r["processId"], label, r["processName"], False))
+                    people_total = people_by_process.get(r["processId"], 0)
+                    proc_options.append((r["processId"], people_label(label, people_total), r["processName"], False))
 
             else:
                 unique_profiles = sorted(df_cand_all["profile_name"].dropna().unique().tolist())
-                proc_options = [("__all__", "Todos los perfiles", None, False)]
+                if "total_candidates" in df_cand_all.columns:
+                    people_by_profile = (
+                        df_cand_all.assign(total_candidates=pd.to_numeric(df_cand_all["total_candidates"], errors="coerce").fillna(0))
+                        .groupby("profile_name")["total_candidates"]
+                        .sum()
+                        .to_dict()
+                    )
+                else:
+                    people_by_profile = df_cand_all.groupby("profile_name").size().to_dict()
+
+                proc_options = [("__all__", people_label("Todos los perfiles", total_people_all), None, False)]
                 for pname in unique_profiles:
-                    proc_options.append(("__profile__", pname, pname, False))
+                    people_total = people_by_profile.get(pname, 0)
+                    proc_options.append(("__profile__", people_label(pname, people_total), pname, False))
 
             radio_labels = [o[1] for o in proc_options]
 
